@@ -1,0 +1,750 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#2D3436">
+<title>Family Hub</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏠</text></svg>">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #F4F5F9; min-height: 100vh; -webkit-tap-highlight-color: transparent; }
+  input, select, button, textarea { font-family: inherit; }
+  #root { max-width: 520px; margin: 0 auto; min-height: 100vh; }
+</style>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js"></script>
+</head>
+<body>
+<div id="root"></div>
+
+<script>
+// ═══════════════════════════════════════════════════════
+// FIREBASE CONFIG — Replace these values with your own
+// (See SETUP-GUIDE.md for step-by-step instructions)
+// ═══════════════════════════════════════════════════════
+const FIREBASE_CONFIG = {
+  apiKey: "AIzaSyBvoixwQgoaIiOxnFAF7KubT6dpXdXeT6U",
+  authDomain: "family-hub-bf745.firebaseapp.com",
+  databaseURL: "https://family-hub-bf745-default-rtdb.firebaseio.com",
+  projectId: "family-hub-bf745",
+  storageBucket: "family-hub-bf745.firebasestorage.app",
+  messagingSenderId: "777648159609",
+  appId: "1:777648159609:web:259726bb5dee6ccddc8da8"
+};
+
+const IS_CONFIGURED = !FIREBASE_CONFIG.apiKey.includes("YOUR_");
+
+let db = null;
+if (IS_CONFIGURED) {
+  firebase.initializeApp(FIREBASE_CONFIG);
+  db = firebase.database();
+}
+</script>
+
+<script type="text/babel">
+const { useState, useEffect, useMemo, useCallback } = React;
+
+// ── Family Members ──
+const FAMILY = [
+  { id: "alex", name: "Alex", emoji: "👨", color: "#2E86AB", role: "parent" },
+  { id: "jess", name: "Jess", emoji: "👩", color: "#7C6BC4", role: "parent" },
+  { id: "oliver", name: "Oliver", emoji: "👦", color: "#E8871E", role: "kid", age: 11 },
+  { id: "sydney", name: "Sydney", emoji: "👧", color: "#E84393", role: "kid", age: 7 },
+];
+
+const TYPE_COLORS = {
+  school: { bg: "#EBF3FB", border: "#4A90D9", label: "School", icon: "🏫" },
+  camp:   { bg: "#EAFAF1", border: "#27AE60", label: "Camp", icon: "🏕️" },
+  chore:  { bg: "#FEF5E7", border: "#E67E22", label: "Chore", icon: "🧹" },
+  event:  { bg: "#FDEDEE", border: "#E74C3C", label: "Event", icon: "📅" },
+  need:   { bg: "#F5EEF8", border: "#8E44AD", label: "Need", icon: "📋" },
+};
+
+// ── Demo Data (used when Firebase is not configured) ──
+const DEMO_ACTIVITIES = [
+  { id: "a1", title: "Day Camp - Nature Explorers", type: "camp", person: "sydney", date: "2026-06-15", time: "8:00 AM", needs: "Sunscreen, water bottle, hat" },
+  { id: "a2", title: "Soccer Practice", type: "event", person: "oliver", date: "2026-06-15", time: "4:00 PM", needs: "Cleats, shin guards" },
+  { id: "a3", title: "Science Camp", type: "camp", person: "oliver", date: "2026-06-16", time: "9:00 AM", needs: "Pack sack lunch, wear closed-toe shoes" },
+  { id: "a4", title: "Swim Lessons", type: "event", person: "sydney", date: "2026-06-16", time: "10:30 AM", needs: "Swimsuit, towel, goggles" },
+  { id: "a5", title: "Summer Reading Program", type: "school", person: "oliver", date: "2026-06-17", time: "1:00 PM", needs: "Library card, reading log" },
+  { id: "a6", title: "Art Class", type: "camp", person: "sydney", date: "2026-06-17", time: "9:00 AM", needs: "Old shirt for painting" },
+  { id: "a7", title: "Dentist Appointment", type: "event", person: "sydney", date: "2026-06-18", time: "10:00 AM", needs: "" },
+  { id: "a8", title: "Baseball Game", type: "event", person: "oliver", date: "2026-06-18", time: "5:30 PM", needs: "Uniform, glove, water" },
+  { id: "a9", title: "Grocery Run", type: "chore", person: "jess", date: "2026-06-14", time: "10:00 AM", needs: "" },
+  { id: "a10", title: "Mow Lawn", type: "chore", person: "alex", date: "2026-06-14", time: "8:00 AM", needs: "" },
+  { id: "a11", title: "Nature Camp", type: "camp", person: "sydney", date: "2026-06-14", time: "8:00 AM", needs: "Wear red camp shirt, sunscreen" },
+  { id: "a12", title: "Basketball Camp", type: "camp", person: "oliver", date: "2026-06-14", time: "9:00 AM", needs: "Packed lunch, basketball shoes, water bottle" },
+];
+
+const DEMO_CHORES = [
+  { id: "c1", title: "Make Bed", person: "sydney", value: 0.50, frequency: "daily", done: false, date: "2026-06-14" },
+  { id: "c2", title: "Make Bed", person: "oliver", value: 0.50, frequency: "daily", done: true, date: "2026-06-14" },
+  { id: "c3", title: "Feed the Dog", person: "oliver", value: 1.00, frequency: "daily", done: false, date: "2026-06-14" },
+  { id: "c4", title: "Set the Table", person: "sydney", value: 0.75, frequency: "daily", done: false, date: "2026-06-14" },
+  { id: "c5", title: "Clear Dishes", person: "oliver", value: 0.75, frequency: "daily", done: true, date: "2026-06-14" },
+  { id: "c6", title: "Pick Up Toys", person: "sydney", value: 1.00, frequency: "daily", done: true, date: "2026-06-14" },
+  { id: "c7", title: "Take Out Trash", person: "oliver", value: 1.50, frequency: "weekly", done: false, date: "2026-06-14" },
+  { id: "c8", title: "Vacuum Living Room", person: "oliver", value: 2.00, frequency: "weekly", done: false, date: "2026-06-14" },
+  { id: "c9", title: "Water Plants", person: "sydney", value: 1.00, frequency: "weekly", done: false, date: "2026-06-14" },
+  { id: "c10", title: "Wipe Counters", person: "alex", value: 0, frequency: "daily", done: false, date: "2026-06-14" },
+  { id: "c11", title: "Load Dishwasher", person: "jess", value: 0, frequency: "daily", done: true, date: "2026-06-14" },
+];
+
+const DEMO_REWARDS = [
+  { id: "r1", person: "oliver", amount: 5.25, type: "earned", note: "Week of June 8 chores", date: "2026-06-08" },
+  { id: "r2", person: "sydney", amount: 3.75, type: "earned", note: "Week of June 8 chores", date: "2026-06-08" },
+  { id: "r3", person: "oliver", amount: -2.00, type: "penalty", note: "Left bike in driveway", date: "2026-06-10" },
+  { id: "r4", person: "sydney", amount: 2.00, type: "bonus", note: "Helped neighbor with yard", date: "2026-06-11" },
+  { id: "r5", person: "oliver", amount: 3.00, type: "bonus", note: "Extra yard work", date: "2026-06-12" },
+];
+
+// ── Firebase Helpers ──
+function useFirebaseCollection(path, demoData) {
+  const [data, setData] = useState(IS_CONFIGURED ? [] : demoData);
+  const [loaded, setLoaded] = useState(!IS_CONFIGURED);
+
+  useEffect(() => {
+    if (!IS_CONFIGURED || !db) return;
+    const ref = db.ref(path);
+    ref.on("value", (snap) => {
+      const val = snap.val();
+      if (val) {
+        const arr = Object.entries(val).map(([key, v]) => ({ ...v, _fbKey: key }));
+        setData(arr);
+      } else {
+        setData([]);
+      }
+      setLoaded(true);
+    });
+    return () => ref.off();
+  }, [path]);
+
+  const add = useCallback((item) => {
+    if (IS_CONFIGURED && db) {
+      const ref = db.ref(path).push();
+      ref.set({ ...item, id: ref.key });
+    } else {
+      setData(prev => [...prev, { ...item, id: "local_" + Date.now() }]);
+    }
+  }, [path]);
+
+  const update = useCallback((id, updates) => {
+    if (IS_CONFIGURED && db) {
+      const item = data.find(d => d.id === id || d._fbKey === id);
+      const key = item?._fbKey || item?.id;
+      if (key) db.ref(path + "/" + key).update(updates);
+    } else {
+      setData(prev => prev.map(d => d.id === id ? { ...d, ...updates } : d));
+    }
+  }, [path, data]);
+
+  const remove = useCallback((id) => {
+    if (IS_CONFIGURED && db) {
+      const item = data.find(d => d.id === id || d._fbKey === id);
+      const key = item?._fbKey || item?.id;
+      if (key) db.ref(path + "/" + key).remove();
+    } else {
+      setData(prev => prev.filter(d => d.id !== id));
+    }
+  }, [path, data]);
+
+  return { data, loaded, add, update, remove };
+}
+
+// ── Utility Functions ──
+function formatDate(dateStr) {
+  const d = new Date(dateStr + "T00:00:00");
+  return d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+}
+
+function getWeekDates(baseDate) {
+  const start = new Date(baseDate);
+  const day = start.getDay();
+  start.setDate(start.getDate() - day);
+  return Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(start);
+    d.setDate(start.getDate() + i);
+    return dateKey(d);
+  });
+}
+
+function dateKey(d) { return d.toISOString().split("T")[0]; }
+
+function todayKey() { return dateKey(new Date()); }
+
+// ── Small Components ──
+function PersonPill({ personId, small }) {
+  const p = FAMILY.find(f => f.id === personId);
+  if (!p) return null;
+  return (
+    <span style={{
+      display: "inline-flex", alignItems: "center", gap: 4,
+      background: p.color + "18", color: p.color, border: `1.5px solid ${p.color}40`,
+      borderRadius: 20, padding: small ? "1px 8px" : "2px 10px",
+      fontSize: small ? 11 : 12, fontWeight: 600, whiteSpace: "nowrap"
+    }}>{p.emoji} {p.name}</span>
+  );
+}
+
+function TypeBadge({ type }) {
+  const t = TYPE_COLORS[type];
+  if (!t) return null;
+  return (
+    <span style={{
+      display: "inline-flex", alignItems: "center", gap: 3,
+      background: t.bg, color: t.border, border: `1px solid ${t.border}30`,
+      borderRadius: 6, padding: "1px 7px", fontSize: 11, fontWeight: 600
+    }}>{t.icon} {t.label}</span>
+  );
+}
+
+function Modal({ open, onClose, title, children }) {
+  if (!open) return null;
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.35)" }} onClick={onClose}>
+      <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 16, width: "92%", maxWidth: 420, maxHeight: "85vh", overflow: "auto", padding: 24, boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+          <h3 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: "#2D3436" }}>{title}</h3>
+          <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 22, cursor: "pointer", color: "#999", padding: "4px 8px" }}>✕</button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+// ── Activity Card ──
+function ActivityCard({ activity, onExpand }) {
+  const person = FAMILY.find(f => f.id === activity.person);
+  return (
+    <div onClick={() => onExpand(activity)} style={{
+      background: "#fff", borderRadius: 12, padding: "12px 14px",
+      borderLeft: `4px solid ${person?.color || "#ccc"}`,
+      boxShadow: "0 1px 4px rgba(0,0,0,0.06)", cursor: "pointer", marginBottom: 8
+    }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontWeight: 600, fontSize: 14, color: "#2D3436", marginBottom: 4 }}>{activity.title}</div>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+            <PersonPill personId={activity.person} small />
+            <TypeBadge type={activity.type} />
+          </div>
+        </div>
+        <div style={{ fontSize: 12, color: "#888", fontWeight: 500, whiteSpace: "nowrap", marginTop: 2 }}>{activity.time}</div>
+      </div>
+      {activity.needs && (
+        <div style={{ marginTop: 8, padding: "6px 10px", background: "#FFF9E6", borderRadius: 8, fontSize: 12, color: "#8B6914", display: "flex", gap: 6, alignItems: "flex-start" }}>
+          <span>⚠️</span><span><strong>Needs:</strong> {activity.needs}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Chore Row ──
+function ChoreRow({ chore, onToggle, onDelete }) {
+  const person = FAMILY.find(f => f.id === chore.person);
+  const isKid = person?.role === "kid";
+  return (
+    <div style={{
+      display: "flex", alignItems: "center", gap: 10, padding: "10px 14px",
+      background: chore.done ? "#F8FFF8" : "#fff", borderRadius: 12, marginBottom: 6,
+      borderLeft: `4px solid ${person?.color || "#ccc"}`,
+      boxShadow: "0 1px 3px rgba(0,0,0,0.05)", opacity: chore.done ? 0.7 : 1
+    }}>
+      <button onClick={() => onToggle(chore)} style={{
+        width: 26, height: 26, borderRadius: 8, border: `2px solid ${chore.done ? "#27AE60" : "#ccc"}`,
+        background: chore.done ? "#27AE60" : "#fff", cursor: "pointer",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        fontSize: 14, color: "#fff", flexShrink: 0
+      }}>{chore.done && "✓"}</button>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontWeight: 600, fontSize: 14, color: "#2D3436", textDecoration: chore.done ? "line-through" : "none" }}>{chore.title}</div>
+        <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 3 }}>
+          <PersonPill personId={chore.person} small />
+          <span style={{ fontSize: 11, color: "#999", textTransform: "capitalize" }}>{chore.frequency}</span>
+        </div>
+      </div>
+      {isKid && chore.value > 0 && (
+        <div style={{ fontWeight: 700, fontSize: 15, color: chore.done ? "#27AE60" : "#2D3436", whiteSpace: "nowrap" }}>
+          ${Number(chore.value).toFixed(2)}
+        </div>
+      )}
+      <button onClick={() => onDelete(chore)} style={{
+        background: "none", border: "none", fontSize: 16, color: "#ccc", cursor: "pointer", padding: "4px"
+      }}>×</button>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════
+// SETUP SCREEN (shown when Firebase is not configured)
+// ══════════════════════════════════════════════════════
+function SetupBanner() {
+  if (IS_CONFIGURED) return null;
+  return (
+    <div style={{ margin: "0 16px 12px", padding: "12px 16px", background: "#FFF3CD", borderRadius: 12, fontSize: 13, color: "#856404", border: "1px solid #FFEEBA" }}>
+      <strong>Demo Mode</strong> — Data is local only and won't sync. Open this file in a text editor and replace the Firebase config at the top to enable sharing. See the setup guide for instructions.
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════
+// MAIN APP
+// ══════════════════════════════════════════════════════
+function FamilyHub() {
+  const [tab, setTab] = useState("calendar");
+  const [calView, setCalView] = useState("day");
+  const [selectedDate, setSelectedDate] = useState(todayKey());
+  const [filterPerson, setFilterPerson] = useState("all");
+  const [expandedActivity, setExpandedActivity] = useState(null);
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [addType, setAddType] = useState("activity");
+  const [confirmDelete, setConfirmDelete] = useState(null);
+
+  // Firebase-backed collections
+  const activitiesColl = useFirebaseCollection("activities", DEMO_ACTIVITIES);
+  const choresColl = useFirebaseCollection("chores", DEMO_CHORES);
+  const rewardsColl = useFirebaseCollection("rewards", DEMO_REWARDS);
+
+  // Form state
+  const [formTitle, setFormTitle] = useState("");
+  const [formPerson, setFormPerson] = useState("oliver");
+  const [formType, setFormType] = useState("event");
+  const [formDate, setFormDate] = useState(todayKey());
+  const [formTime, setFormTime] = useState("9:00 AM");
+  const [formNeeds, setFormNeeds] = useState("");
+  const [formValue, setFormValue] = useState("1.00");
+  const [formFreq, setFormFreq] = useState("daily");
+  const [formRewardType, setFormRewardType] = useState("bonus");
+  const [formNote, setFormNote] = useState("");
+
+  const weekDates = useMemo(() => getWeekDates(new Date(selectedDate + "T00:00:00")), [selectedDate]);
+
+  const filteredActivities = activitiesColl.data.filter(a =>
+    filterPerson === "all" || a.person === filterPerson
+  );
+
+  const todayActivities = filteredActivities
+    .filter(a => a.date === selectedDate)
+    .sort((a, b) => (a.time || "").localeCompare(b.time || ""));
+
+  const todayChores = choresColl.data
+    .filter(c => c.date === selectedDate && (filterPerson === "all" || c.person === filterPerson))
+    .sort((a, b) => (a.done ? 1 : 0) - (b.done ? 1 : 0));
+
+  const toggleChore = (chore) => {
+    choresColl.update(chore.id || chore._fbKey, { done: !chore.done });
+  };
+
+  const deleteItem = () => {
+    if (!confirmDelete) return;
+    const { type, item } = confirmDelete;
+    if (type === "activity") activitiesColl.remove(item.id || item._fbKey);
+    else if (type === "chore") choresColl.remove(item.id || item._fbKey);
+    else if (type === "reward") rewardsColl.remove(item.id || item._fbKey);
+    setConfirmDelete(null);
+  };
+
+  const kidRewardTotals = FAMILY.filter(f => f.role === "kid").map(kid => {
+    const entries = rewardsColl.data.filter(r => r.person === kid.id);
+    const total = entries.reduce((sum, r) => sum + Number(r.amount), 0);
+    const todayEarned = choresColl.data
+      .filter(c => c.person === kid.id && c.done && c.date === selectedDate)
+      .reduce((sum, c) => sum + Number(c.value || 0), 0);
+    return { ...kid, entries, total, todayEarned };
+  });
+
+  const handleAdd = () => {
+    if (!formTitle.trim()) return;
+    if (addType === "activity") {
+      activitiesColl.add({ title: formTitle, type: formType, person: formPerson, date: formDate, time: formTime, needs: formNeeds });
+    } else if (addType === "chore") {
+      choresColl.add({ title: formTitle, person: formPerson, value: parseFloat(formValue) || 0, frequency: formFreq, done: false, date: formDate });
+    } else {
+      const amt = parseFloat(formValue) || 0;
+      rewardsColl.add({ person: formPerson, amount: formRewardType === "penalty" ? -amt : amt, type: formRewardType, note: formNote || formTitle, date: formDate });
+    }
+    setShowAddModal(false);
+    setFormTitle(""); setFormNeeds(""); setFormNote("");
+  };
+
+  const navigateDay = (dir) => {
+    const d = new Date(selectedDate + "T00:00:00");
+    d.setDate(d.getDate() + dir);
+    setSelectedDate(dateKey(d));
+  };
+
+  const navigateWeek = (dir) => {
+    const d = new Date(selectedDate + "T00:00:00");
+    d.setDate(d.getDate() + dir * 7);
+    setSelectedDate(dateKey(d));
+  };
+
+  const inputStyle = { width: "100%", padding: "10px 12px", borderRadius: 10, border: "1.5px solid #E0E0E0", fontSize: 14, outline: "none", fontFamily: "inherit", boxSizing: "border-box" };
+  const selectStyle = { ...inputStyle, background: "#fff", WebkitAppearance: "none" };
+  const labelStyle = { fontSize: 12, fontWeight: 600, color: "#666", marginBottom: 4, display: "block" };
+
+  return (
+    <div style={{ background: "#F4F5F9", minHeight: "100vh" }}>
+
+      {/* ── Header ── */}
+      <div style={{ background: "linear-gradient(135deg, #2D3436 0%, #434E52 100%)", padding: "env(safe-area-inset-top, 12px) 20px 16px", color: "#fff" }}>
+        <div style={{ paddingTop: 12, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div>
+            <div style={{ fontSize: 22, fontWeight: 800, letterSpacing: -0.5 }}>🏠 Family Hub</div>
+            <div style={{ fontSize: 12, color: "#A8B2B7", marginTop: 2 }}>{formatDate(selectedDate)}</div>
+          </div>
+          <button onClick={() => { setShowAddModal(true); setAddType("activity"); }} style={{
+            width: 42, height: 42, borderRadius: 12, border: "none",
+            background: "rgba(255,255,255,0.15)", color: "#fff", fontSize: 26,
+            cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center"
+          }}>+</button>
+        </div>
+        <div style={{ display: "flex", gap: 6, marginTop: 14, overflowX: "auto", paddingBottom: 4, WebkitOverflowScrolling: "touch" }}>
+          <button onClick={() => setFilterPerson("all")} style={{
+            padding: "6px 14px", borderRadius: 20, border: "none", cursor: "pointer",
+            fontSize: 12, fontWeight: 600,
+            background: filterPerson === "all" ? "rgba(255,255,255,0.25)" : "rgba(255,255,255,0.08)",
+            color: "#fff", whiteSpace: "nowrap"
+          }}>All</button>
+          {FAMILY.map(f => (
+            <button key={f.id} onClick={() => setFilterPerson(f.id)} style={{
+              padding: "6px 14px", borderRadius: 20, border: "none", cursor: "pointer",
+              fontSize: 12, fontWeight: 600,
+              background: filterPerson === f.id ? f.color + "40" : "rgba(255,255,255,0.08)",
+              color: "#fff", whiteSpace: "nowrap"
+            }}>{f.emoji} {f.name}</button>
+          ))}
+        </div>
+      </div>
+
+      {/* ── Tab Bar ── */}
+      <div style={{ display: "flex", background: "#fff", borderBottom: "1px solid #E8E8E8", position: "sticky", top: 0, zIndex: 50 }}>
+        {[
+          { key: "calendar", label: "📅 Calendar" },
+          { key: "chores", label: "🧹 Chores" },
+          { key: "rewards", label: "💰 Rewards" }
+        ].map(t => (
+          <button key={t.key} onClick={() => setTab(t.key)} style={{
+            flex: 1, padding: "12px 0", border: "none", cursor: "pointer",
+            fontSize: 13, fontWeight: 600, background: "transparent",
+            color: tab === t.key ? "#2D3436" : "#999",
+            borderBottom: tab === t.key ? "3px solid #2D3436" : "3px solid transparent"
+          }}>{t.label}</button>
+        ))}
+      </div>
+
+      <SetupBanner />
+
+      {/* ── Content ── */}
+      <div style={{ padding: "12px 16px 120px" }}>
+
+        {/* ═══ CALENDAR ═══ */}
+        {tab === "calendar" && (
+          <div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+              <div style={{ display: "flex", background: "#E8E8E8", borderRadius: 10, overflow: "hidden" }}>
+                {["day", "week"].map(v => (
+                  <button key={v} onClick={() => setCalView(v)} style={{
+                    padding: "7px 18px", border: "none", cursor: "pointer",
+                    fontSize: 13, fontWeight: 600, textTransform: "capitalize",
+                    background: calView === v ? "#2D3436" : "transparent",
+                    color: calView === v ? "#fff" : "#666"
+                  }}>{v}</button>
+                ))}
+              </div>
+              <div style={{ display: "flex", gap: 6 }}>
+                <button onClick={() => calView === "day" ? navigateDay(-1) : navigateWeek(-1)} style={{ width: 34, height: 34, borderRadius: 8, border: "1px solid #ddd", background: "#fff", cursor: "pointer", fontSize: 16 }}>←</button>
+                <button onClick={() => setSelectedDate(todayKey())} style={{ padding: "0 12px", height: 34, borderRadius: 8, border: "1px solid #ddd", background: "#fff", cursor: "pointer", fontSize: 12, fontWeight: 600, color: "#666" }}>Today</button>
+                <button onClick={() => calView === "day" ? navigateDay(1) : navigateWeek(1)} style={{ width: 34, height: 34, borderRadius: 8, border: "1px solid #ddd", background: "#fff", cursor: "pointer", fontSize: 16 }}>→</button>
+              </div>
+            </div>
+
+            {calView === "day" ? (
+              <div>
+                {todayActivities.length === 0 ? (
+                  <div style={{ textAlign: "center", padding: 48, color: "#999", fontSize: 14 }}>Nothing scheduled for this day.</div>
+                ) : todayActivities.map(a => (
+                  <ActivityCard key={a.id || a._fbKey} activity={a} onExpand={setExpandedActivity} />
+                ))}
+              </div>
+            ) : (
+              <div>
+                {weekDates.map(wd => {
+                  const dayActs = filteredActivities.filter(a => a.date === wd).sort((a, b) => (a.time || "").localeCompare(b.time || ""));
+                  const isToday = wd === todayKey();
+                  return (
+                    <div key={wd} style={{ marginBottom: 10 }}>
+                      <div onClick={() => { setSelectedDate(wd); setCalView("day"); }} style={{
+                        display: "flex", alignItems: "center", gap: 10, padding: "8px 0",
+                        cursor: "pointer", borderBottom: "1px solid #eee"
+                      }}>
+                        <div style={{
+                          width: 38, height: 38, borderRadius: 10, display: "flex",
+                          flexDirection: "column", alignItems: "center", justifyContent: "center",
+                          background: isToday ? "#2D3436" : "transparent",
+                          color: isToday ? "#fff" : "#2D3436", flexShrink: 0
+                        }}>
+                          <div style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", lineHeight: 1 }}>
+                            {new Date(wd + "T00:00:00").toLocaleDateString("en-US", { weekday: "short" })}
+                          </div>
+                          <div style={{ fontSize: 15, fontWeight: 700, lineHeight: 1.2 }}>
+                            {new Date(wd + "T00:00:00").getDate()}
+                          </div>
+                        </div>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          {dayActs.length === 0 ? (
+                            <span style={{ fontSize: 12, color: "#bbb" }}>No events</span>
+                          ) : (
+                            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                              {dayActs.map(a => {
+                                const person = FAMILY.find(f => f.id === a.person);
+                                return (
+                                  <div key={a.id || a._fbKey} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12 }}>
+                                    <div style={{ width: 7, height: 7, borderRadius: 4, background: person?.color || "#ccc", flexShrink: 0 }} />
+                                    <span style={{ fontWeight: 500, color: "#2D3436", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.title}</span>
+                                    <span style={{ color: "#999", marginLeft: "auto", fontSize: 11, flexShrink: 0 }}>{a.time}</span>
+                                    {a.needs && <span style={{ fontSize: 10, flexShrink: 0 }}>⚠️</span>}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ═══ CHORES ═══ */}
+        {tab === "chores" && (
+          <div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+              <div style={{ fontSize: 14, color: "#666" }}>
+                {todayChores.filter(c => c.done).length}/{todayChores.length} done
+              </div>
+              <button onClick={() => { setShowAddModal(true); setAddType("chore"); }} style={{
+                padding: "7px 16px", borderRadius: 8, border: "none",
+                background: "#2D3436", color: "#fff", fontSize: 13, fontWeight: 600, cursor: "pointer"
+              }}>+ Add Chore</button>
+            </div>
+            <div style={{ height: 6, borderRadius: 3, background: "#E8E8E8", marginBottom: 16, overflow: "hidden" }}>
+              <div style={{
+                height: "100%", borderRadius: 3, background: "linear-gradient(90deg, #27AE60, #2ECC71)",
+                width: todayChores.length > 0 ? `${(todayChores.filter(c => c.done).length / todayChores.length) * 100}%` : "0%",
+                transition: "width 0.3s"
+              }} />
+            </div>
+            {todayChores.length === 0 ? (
+              <div style={{ textAlign: "center", padding: 48, color: "#999", fontSize: 14 }}>No chores for this day.</div>
+            ) : todayChores.map(c => (
+              <ChoreRow key={c.id || c._fbKey} chore={c} onToggle={toggleChore} onDelete={(item) => setConfirmDelete({ type: "chore", item })} />
+            ))}
+          </div>
+        )}
+
+        {/* ═══ REWARDS ═══ */}
+        {tab === "rewards" && (
+          <div>
+            <div style={{ display: "flex", gap: 10, marginBottom: 16 }}>
+              {kidRewardTotals.map(kid => (
+                <div key={kid.id} style={{
+                  flex: 1, padding: "14px 12px", borderRadius: 14,
+                  background: "#fff", boxShadow: "0 2px 8px rgba(0,0,0,0.06)",
+                  borderTop: `4px solid ${kid.color}`
+                }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: "#666", marginBottom: 2 }}>{kid.emoji} {kid.name}</div>
+                  <div style={{ fontSize: 24, fontWeight: 800, color: kid.total >= 0 ? "#27AE60" : "#E74C3C" }}>
+                    ${kid.total.toFixed(2)}
+                  </div>
+                  {kid.todayEarned > 0 && (
+                    <div style={{ fontSize: 11, color: "#27AE60", marginTop: 4 }}>+${kid.todayEarned.toFixed(2)} today</div>
+                  )}
+                </div>
+              ))}
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+              <div style={{ fontSize: 14, fontWeight: 700, color: "#2D3436" }}>History</div>
+              <button onClick={() => { setShowAddModal(true); setAddType("reward"); }} style={{
+                padding: "7px 16px", borderRadius: 8, border: "none",
+                background: "#2D3436", color: "#fff", fontSize: 13, fontWeight: 600, cursor: "pointer"
+              }}>+ Bonus / Penalty</button>
+            </div>
+            {[...rewardsColl.data].sort((a, b) => (b.date || "").localeCompare(a.date || "")).map(r => {
+              const person = FAMILY.find(f => f.id === r.person);
+              return (
+                <div key={r.id || r._fbKey} style={{
+                  display: "flex", alignItems: "center", gap: 10, padding: "10px 14px",
+                  background: "#fff", borderRadius: 12, marginBottom: 6,
+                  borderLeft: `4px solid ${person?.color || "#ccc"}`,
+                  boxShadow: "0 1px 3px rgba(0,0,0,0.05)"
+                }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 600, fontSize: 13, color: "#2D3436" }}>{r.note}</div>
+                    <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 3 }}>
+                      <PersonPill personId={r.person} small />
+                      <span style={{ fontSize: 11, color: "#999" }}>{formatDate(r.date)}</span>
+                    </div>
+                  </div>
+                  <div style={{ fontWeight: 700, fontSize: 15, whiteSpace: "nowrap", color: Number(r.amount) >= 0 ? "#27AE60" : "#E74C3C" }}>
+                    {Number(r.amount) >= 0 ? "+" : ""}${Number(r.amount).toFixed(2)}
+                  </div>
+                  <button onClick={() => setConfirmDelete({ type: "reward", item: r })} style={{
+                    background: "none", border: "none", fontSize: 16, color: "#ccc", cursor: "pointer", padding: "4px"
+                  }}>×</button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* ── Expanded Activity Modal ── */}
+      <Modal open={!!expandedActivity} onClose={() => setExpandedActivity(null)} title={expandedActivity?.title || ""}>
+        {expandedActivity && (() => {
+          return (
+            <div>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 14 }}>
+                <PersonPill personId={expandedActivity.person} />
+                <TypeBadge type={expandedActivity.type} />
+              </div>
+              <div style={{ fontSize: 14, color: "#555", marginBottom: 8 }}><strong>Date:</strong> {formatDate(expandedActivity.date)}</div>
+              <div style={{ fontSize: 14, color: "#555", marginBottom: 8 }}><strong>Time:</strong> {expandedActivity.time}</div>
+              {expandedActivity.needs && (
+                <div style={{ padding: "10px 14px", background: "#FFF9E6", borderRadius: 10, fontSize: 13, color: "#8B6914", marginTop: 8 }}>
+                  <strong>⚠️ What to bring / wear:</strong><br />{expandedActivity.needs}
+                </div>
+              )}
+              <button onClick={() => { setConfirmDelete({ type: "activity", item: expandedActivity }); setExpandedActivity(null); }} style={{
+                marginTop: 16, width: "100%", padding: 12, borderRadius: 10, border: "1px solid #E74C3C",
+                background: "#fff", color: "#E74C3C", fontSize: 14, fontWeight: 600, cursor: "pointer"
+              }}>Delete Activity</button>
+            </div>
+          );
+        })()}
+      </Modal>
+
+      {/* ── Delete Confirm Modal ── */}
+      <Modal open={!!confirmDelete} onClose={() => setConfirmDelete(null)} title="Delete this item?">
+        <p style={{ fontSize: 14, color: "#666", marginBottom: 16 }}>
+          This will permanently remove <strong>{confirmDelete?.item?.title || confirmDelete?.item?.note}</strong>. This can't be undone.
+        </p>
+        <div style={{ display: "flex", gap: 10 }}>
+          <button onClick={() => setConfirmDelete(null)} style={{
+            flex: 1, padding: 12, borderRadius: 10, border: "1px solid #ddd",
+            background: "#fff", fontSize: 14, fontWeight: 600, cursor: "pointer", color: "#666"
+          }}>Cancel</button>
+          <button onClick={deleteItem} style={{
+            flex: 1, padding: 12, borderRadius: 10, border: "none",
+            background: "#E74C3C", color: "#fff", fontSize: 14, fontWeight: 600, cursor: "pointer"
+          }}>Delete</button>
+        </div>
+      </Modal>
+
+      {/* ── Add Modal ── */}
+      <Modal open={showAddModal} onClose={() => setShowAddModal(false)} title={`Add ${addType === "reward" ? "Bonus / Penalty" : addType === "chore" ? "Chore" : "Activity"}`}>
+        <div style={{ display: "flex", gap: 4, marginBottom: 16 }}>
+          {["activity", "chore", "reward"].map(t => (
+            <button key={t} onClick={() => setAddType(t)} style={{
+              flex: 1, padding: "8px 0", borderRadius: 8, border: "none", cursor: "pointer",
+              fontSize: 12, fontWeight: 600, textTransform: "capitalize",
+              background: addType === t ? "#2D3436" : "#F0F0F0",
+              color: addType === t ? "#fff" : "#666"
+            }}>{t}</button>
+          ))}
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <div>
+            <label style={labelStyle}>{addType === "reward" ? "Description" : "Title"}</label>
+            <input value={formTitle} onChange={e => setFormTitle(e.target.value)} placeholder={addType === "activity" ? "e.g. Soccer Practice" : addType === "chore" ? "e.g. Feed the Dog" : "e.g. Extra yard work"} style={inputStyle} />
+          </div>
+          <div>
+            <label style={labelStyle}>Assign to</label>
+            <select value={formPerson} onChange={e => setFormPerson(e.target.value)} style={selectStyle}>
+              {(addType === "reward" ? FAMILY.filter(f => f.role === "kid") : FAMILY).map(f => (
+                <option key={f.id} value={f.id}>{f.emoji} {f.name}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label style={labelStyle}>Date</label>
+            <input type="date" value={formDate} onChange={e => setFormDate(e.target.value)} style={inputStyle} />
+          </div>
+          {addType === "activity" && (
+            <>
+              <div>
+                <label style={labelStyle}>Type</label>
+                <select value={formType} onChange={e => setFormType(e.target.value)} style={selectStyle}>
+                  {Object.entries(TYPE_COLORS).filter(([k]) => k !== "chore").map(([k, v]) => (
+                    <option key={k} value={k}>{v.icon} {v.label}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label style={labelStyle}>Time</label>
+                <input value={formTime} onChange={e => setFormTime(e.target.value)} placeholder="9:00 AM" style={inputStyle} />
+              </div>
+              <div>
+                <label style={labelStyle}>Needs (shirt, lunch, supplies…)</label>
+                <input value={formNeeds} onChange={e => setFormNeeds(e.target.value)} placeholder="e.g. Pack sack lunch, wear blue shirt" style={inputStyle} />
+              </div>
+            </>
+          )}
+          {addType === "chore" && (
+            <div style={{ display: "flex", gap: 10 }}>
+              <div style={{ flex: 1 }}>
+                <label style={labelStyle}>$ Value</label>
+                <input value={formValue} onChange={e => setFormValue(e.target.value)} placeholder="1.00" style={inputStyle} />
+              </div>
+              <div style={{ flex: 1 }}>
+                <label style={labelStyle}>Frequency</label>
+                <select value={formFreq} onChange={e => setFormFreq(e.target.value)} style={selectStyle}>
+                  <option value="daily">Daily</option>
+                  <option value="weekly">Weekly</option>
+                  <option value="one-time">One-time</option>
+                </select>
+              </div>
+            </div>
+          )}
+          {addType === "reward" && (
+            <div style={{ display: "flex", gap: 10 }}>
+              <div style={{ flex: 1 }}>
+                <label style={labelStyle}>Amount ($)</label>
+                <input value={formValue} onChange={e => setFormValue(e.target.value)} placeholder="2.00" style={inputStyle} />
+              </div>
+              <div style={{ flex: 1 }}>
+                <label style={labelStyle}>Type</label>
+                <select value={formRewardType} onChange={e => setFormRewardType(e.target.value)} style={selectStyle}>
+                  <option value="bonus">Bonus</option>
+                  <option value="penalty">Penalty</option>
+                </select>
+              </div>
+            </div>
+          )}
+          <button onClick={handleAdd} style={{
+            width: "100%", padding: 14, borderRadius: 12, border: "none",
+            background: "#2D3436", color: "#fff", fontSize: 15, fontWeight: 700,
+            cursor: "pointer", marginTop: 4
+          }}>Add {addType === "reward" ? "Entry" : addType.charAt(0).toUpperCase() + addType.slice(1)}</button>
+        </div>
+      </Modal>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<FamilyHub />);
+</script>
+</body>
+</html>
