@@ -20,6 +20,7 @@
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js"></script>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
 <body>
 <div id="root"></div>
@@ -46,6 +47,126 @@ if (IS_CONFIGURED) {
   firebase.initializeApp(FIREBASE_CONFIG);
   db = firebase.database();
 }
+
+// ═══════════════════════════════════════════════════════
+// GOOGLE CALENDAR CONFIG
+// (See SETUP-GUIDE.md Step 7 for instructions)
+// ═══════════════════════════════════════════════════════
+const GOOGLE_CLIENT_ID = "YOUR_GOOGLE_CLIENT_ID_HERE";
+const GCAL_CONFIGURED = !GOOGLE_CLIENT_ID.includes("YOUR_");
+
+// ── Google Calendar API Helpers ──
+const GCal = {
+  accessToken: null,
+  calendarId: null,
+
+  async getToken() {
+    return new Promise((resolve, reject) => {
+      if (!GCAL_CONFIGURED || !window.google?.accounts?.oauth2) {
+        reject(new Error("Google not loaded"));
+        return;
+      }
+      const client = google.accounts.oauth2.initTokenClient({
+        client_id: GOOGLE_CLIENT_ID,
+        scope: "https://www.googleapis.com/auth/calendar",
+        callback: (resp) => {
+          if (resp.error) { reject(resp); return; }
+          GCal.accessToken = resp.access_token;
+          resolve(resp.access_token);
+        }
+      });
+      client.requestAccessToken();
+    });
+  },
+
+  async api(path, method = "GET", body = null) {
+    if (!GCal.accessToken) throw new Error("Not authenticated");
+    const opts = {
+      method,
+      headers: { Authorization: "Bearer " + GCal.accessToken, "Content-Type": "application/json" }
+    };
+    if (body) opts.body = JSON.stringify(body);
+    const res = await fetch("https://www.googleapis.com/calendar/v3" + path, opts);
+    if (res.status === 401) { GCal.accessToken = null; throw new Error("Token expired"); }
+    if (res.status === 204) return null;
+    return res.json();
+  },
+
+  async findOrCreateCalendar() {
+    const list = await GCal.api("/users/me/calendarList");
+    const existing = list.items?.find(c => c.summary === "Family Hub");
+    if (existing) { GCal.calendarId = existing.id; return existing.id; }
+    const created = await GCal.api("/calendars", "POST", {
+      summary: "Family Hub",
+      description: "Synced from Family Hub app",
+      timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone
+    });
+    GCal.calendarId = created.id;
+    return created.id;
+  },
+
+  parseTime(timeStr) {
+    if (!timeStr) return { hours: 9, minutes: 0 };
+    const match = timeStr.match(/(\d+):(\d+)\s*(AM|PM)?/i);
+    if (!match) return { hours: 9, minutes: 0 };
+    let hours = parseInt(match[1]);
+    const minutes = parseInt(match[2]);
+    const ampm = (match[3] || "").toUpperCase();
+    if (ampm === "PM" && hours < 12) hours += 12;
+    if (ampm === "AM" && hours === 12) hours = 0;
+    return { hours, minutes };
+  },
+
+  buildEventBody(item) {
+    const person = ["alex","jess","oliver","sydney"].includes(item.person)
+      ? item.person.charAt(0).toUpperCase() + item.person.slice(1) : item.person;
+    const { hours, minutes } = GCal.parseTime(item.time);
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const startDt = new Date(item.date + "T00:00:00");
+    startDt.setHours(hours, minutes, 0);
+    const endDt = new Date(startDt);
+    endDt.setHours(endDt.getHours() + 1);
+    const fmt = d => d.toISOString().replace("Z", "");
+    const description = [
+      `Assigned to: ${person}`,
+      item.type ? `Type: ${item.type}` : "",
+      item.needs ? `⚠️ Needs: ${item.needs}` : "",
+      item.value ? `Value: $${Number(item.value).toFixed(2)}` : ""
+    ].filter(Boolean).join("\n");
+
+    return {
+      summary: `[${person}] ${item.title}`,
+      description,
+      start: { dateTime: fmt(startDt), timeZone: tz },
+      end: { dateTime: fmt(endDt), timeZone: tz },
+      colorId: { alex: "7", jess: "3", oliver: "5", sydney: "6" }[item.person] || "1"
+    };
+  },
+
+  async createEvent(item) {
+    if (!GCal.accessToken || !GCal.calendarId) return null;
+    try {
+      const body = GCal.buildEventBody(item);
+      const evt = await GCal.api(`/calendars/${encodeURIComponent(GCal.calendarId)}/events`, "POST", body);
+      return evt?.id || null;
+    } catch (e) { console.error("GCal create error:", e); return null; }
+  },
+
+  async updateEvent(gcalEventId, item) {
+    if (!GCal.accessToken || !GCal.calendarId || !gcalEventId) return;
+    try {
+      const body = GCal.buildEventBody(item);
+      await GCal.api(`/calendars/${encodeURIComponent(GCal.calendarId)}/events/${gcalEventId}`, "PUT", body);
+    } catch (e) { console.error("GCal update error:", e); }
+  },
+
+  async deleteEvent(gcalEventId) {
+    if (!GCal.accessToken || !GCal.calendarId || !gcalEventId) return;
+    try {
+      await GCal.api(`/calendars/${encodeURIComponent(GCal.calendarId)}/events/${gcalEventId}`, "DELETE");
+    } catch (e) { console.error("GCal delete error:", e); }
+  }
+};
 </script>
 
 <script type="text/babel">
@@ -223,21 +344,33 @@ function Modal({ open, onClose, title, children }) {
 // ── Activity Card ──
 function ActivityCard({ activity, onExpand }) {
   const person = FAMILY.find(f => f.id === activity.person);
+  const isChore = activity._source === "chore";
+  const isKid = person?.role === "kid";
   return (
     <div onClick={() => onExpand(activity)} style={{
-      background: "#fff", borderRadius: 12, padding: "12px 14px",
+      background: isChore && activity.done ? "#F8FFF8" : "#fff",
+      borderRadius: 12, padding: "12px 14px",
       borderLeft: `4px solid ${person?.color || "#ccc"}`,
-      boxShadow: "0 1px 4px rgba(0,0,0,0.06)", cursor: "pointer", marginBottom: 8
+      boxShadow: "0 1px 4px rgba(0,0,0,0.06)", cursor: "pointer", marginBottom: 8,
+      opacity: isChore && activity.done ? 0.7 : 1
     }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontWeight: 600, fontSize: 14, color: "#2D3436", marginBottom: 4 }}>{activity.title}</div>
+          <div style={{ fontWeight: 600, fontSize: 14, color: "#2D3436", marginBottom: 4, display: "flex", alignItems: "center", gap: 6 }}>
+            {isChore && activity.done && <span style={{ color: "#27AE60" }}>✓</span>}
+            <span style={{ textDecoration: isChore && activity.done ? "line-through" : "none" }}>{activity.title}</span>
+          </div>
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
             <PersonPill personId={activity.person} small />
             <TypeBadge type={activity.type} />
+            {isChore && isKid && activity.value > 0 && (
+              <span style={{ fontSize: 12, fontWeight: 700, color: activity.done ? "#27AE60" : "#E67E22" }}>
+                ${Number(activity.value).toFixed(2)}
+              </span>
+            )}
           </div>
         </div>
-        <div style={{ fontSize: 12, color: "#888", fontWeight: 500, whiteSpace: "nowrap", marginTop: 2 }}>{activity.time}</div>
+        {activity.time && <div style={{ fontSize: 12, color: "#888", fontWeight: 500, whiteSpace: "nowrap", marginTop: 2 }}>{activity.time}</div>}
       </div>
       {activity.needs && (
         <div style={{ marginTop: 8, padding: "6px 10px", background: "#FFF9E6", borderRadius: 8, fontSize: 12, color: "#8B6914", display: "flex", gap: 6, alignItems: "flex-start" }}>
@@ -288,10 +421,11 @@ function ChoreRow({ chore, onToggle, onDelete }) {
 // SETUP SCREEN (shown when Firebase is not configured)
 // ══════════════════════════════════════════════════════
 function SetupBanner() {
-  if (IS_CONFIGURED) return null;
+  if (IS_CONFIGURED && GCAL_CONFIGURED) return null;
   return (
     <div style={{ margin: "0 16px 12px", padding: "12px 16px", background: "#FFF3CD", borderRadius: 12, fontSize: 13, color: "#856404", border: "1px solid #FFEEBA" }}>
-      <strong>Demo Mode</strong> — Data is local only and won't sync. Open this file in a text editor and replace the Firebase config at the top to enable sharing. See the setup guide for instructions.
+      {!IS_CONFIGURED && <><strong>Demo Mode</strong> — Data is local only. Add your Firebase config to enable sharing.<br/></>}
+      {IS_CONFIGURED && !GCAL_CONFIGURED && <><strong>Google Calendar sync available</strong> — Add your Google Client ID to the config section to enable iPhone calendar sync. See the setup guide.</>}
     </div>
   );
 }
@@ -308,11 +442,55 @@ function FamilyHub() {
   const [showAddModal, setShowAddModal] = useState(false);
   const [addType, setAddType] = useState("activity");
   const [confirmDelete, setConfirmDelete] = useState(null);
+  const [gcalConnected, setGcalConnected] = useState(false);
+  const [gcalSyncing, setGcalSyncing] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
 
   // Firebase-backed collections
   const activitiesColl = useFirebaseCollection("activities", DEMO_ACTIVITIES);
   const choresColl = useFirebaseCollection("chores", DEMO_CHORES);
   const rewardsColl = useFirebaseCollection("rewards", DEMO_REWARDS);
+
+  // ── Google Calendar connect ──
+  const connectGCal = async () => {
+    try {
+      await GCal.getToken();
+      await GCal.findOrCreateCalendar();
+      setGcalConnected(true);
+      // Store calendar ID in Firebase for other devices
+      if (db) db.ref("settings/gcalCalendarId").set(GCal.calendarId);
+    } catch (e) {
+      console.error("GCal connect failed:", e);
+      alert("Could not connect to Google Calendar. Make sure pop-ups are allowed.");
+    }
+  };
+
+  // Restore calendar ID from Firebase if previously connected
+  useEffect(() => {
+    if (!db) return;
+    db.ref("settings/gcalCalendarId").on("value", (snap) => {
+      const id = snap.val();
+      if (id) GCal.calendarId = id;
+    });
+  }, []);
+
+  const syncAllToGCal = async () => {
+    if (!gcalConnected) { await connectGCal(); }
+    if (!GCal.accessToken || !GCal.calendarId) return;
+    setGcalSyncing(true);
+    try {
+      const items = [...activitiesColl.data, ...choresColl.data];
+      for (const item of items) {
+        if (item.gcalEventId) continue; // already synced
+        const gcalId = await GCal.createEvent(item);
+        if (gcalId) {
+          const coll = item.frequency ? choresColl : activitiesColl;
+          coll.update(item.id || item._fbKey, { gcalEventId: gcalId });
+        }
+      }
+    } catch (e) { console.error("Sync error:", e); }
+    setGcalSyncing(false);
+  };
 
   // Form state
   const [formTitle, setFormTitle] = useState("");
@@ -328,11 +506,25 @@ function FamilyHub() {
 
   const weekDates = useMemo(() => getWeekDates(new Date(selectedDate + "T00:00:00")), [selectedDate]);
 
-  const filteredActivities = activitiesColl.data.filter(a =>
+  // Merge activities + chores into one calendar feed
+  const allCalendarItems = useMemo(() => {
+    const acts = activitiesColl.data.map(a => ({ ...a, _source: "activity" }));
+    const choresAsEvents = choresColl.data.map(c => ({
+      ...c,
+      title: c.title + (c.person ? "" : ""),
+      type: "chore",
+      time: c.time || "",
+      needs: "",
+      _source: "chore"
+    }));
+    return [...acts, ...choresAsEvents];
+  }, [activitiesColl.data, choresColl.data]);
+
+  const filteredCalendarItems = allCalendarItems.filter(a =>
     filterPerson === "all" || a.person === filterPerson
   );
 
-  const todayActivities = filteredActivities
+  const todayActivities = filteredCalendarItems
     .filter(a => a.date === selectedDate)
     .sort((a, b) => (a.time || "").localeCompare(b.time || ""));
 
@@ -344,9 +536,13 @@ function FamilyHub() {
     choresColl.update(chore.id || chore._fbKey, { done: !chore.done });
   };
 
-  const deleteItem = () => {
+  const deleteItem = async () => {
     if (!confirmDelete) return;
     const { type, item } = confirmDelete;
+    // Delete from Google Calendar if synced
+    if (item.gcalEventId && GCal.accessToken && GCal.calendarId) {
+      await GCal.deleteEvent(item.gcalEventId);
+    }
     if (type === "activity") activitiesColl.remove(item.id || item._fbKey);
     else if (type === "chore") choresColl.remove(item.id || item._fbKey);
     else if (type === "reward") rewardsColl.remove(item.id || item._fbKey);
@@ -362,15 +558,28 @@ function FamilyHub() {
     return { ...kid, entries, total, todayEarned };
   });
 
-  const handleAdd = () => {
+  const handleAdd = async () => {
     if (!formTitle.trim()) return;
-    if (addType === "activity") {
-      activitiesColl.add({ title: formTitle, type: formType, person: formPerson, date: formDate, time: formTime, needs: formNeeds });
-    } else if (addType === "chore") {
-      choresColl.add({ title: formTitle, person: formPerson, value: parseFloat(formValue) || 0, frequency: formFreq, done: false, date: formDate });
-    } else {
+    const item = addType === "activity"
+      ? { title: formTitle, type: formType, person: formPerson, date: formDate, time: formTime, needs: formNeeds }
+      : addType === "chore"
+      ? { title: formTitle, person: formPerson, value: parseFloat(formValue) || 0, frequency: formFreq, done: false, date: formDate }
+      : null;
+
+    if (addType === "reward") {
       const amt = parseFloat(formValue) || 0;
       rewardsColl.add({ person: formPerson, amount: formRewardType === "penalty" ? -amt : amt, type: formRewardType, note: formNote || formTitle, date: formDate });
+    } else {
+      // Create in Firebase
+      const coll = addType === "activity" ? activitiesColl : choresColl;
+      coll.add(item);
+
+      // Sync to Google Calendar if connected
+      if (gcalConnected && GCal.accessToken && GCal.calendarId) {
+        const gcalId = await GCal.createEvent(item);
+        // We'll update the Firebase record with gcalEventId on next sync
+        // (item doesn't have its Firebase key yet at this point)
+      }
     }
     setShowAddModal(false);
     setFormTitle(""); setFormNeeds(""); setFormNote("");
@@ -402,11 +611,24 @@ function FamilyHub() {
             <div style={{ fontSize: 22, fontWeight: 800, letterSpacing: -0.5 }}>🏠 Family Hub</div>
             <div style={{ fontSize: 12, color: "#A8B2B7", marginTop: 2 }}>{formatDate(selectedDate)}</div>
           </div>
-          <button onClick={() => { setShowAddModal(true); setAddType("activity"); }} style={{
-            width: 42, height: 42, borderRadius: 12, border: "none",
-            background: "rgba(255,255,255,0.15)", color: "#fff", fontSize: 26,
-            cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center"
-          }}>+</button>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            {GCAL_CONFIGURED && (
+              <button onClick={gcalConnected ? syncAllToGCal : connectGCal} style={{
+                height: 42, padding: "0 14px", borderRadius: 12, border: "none",
+                background: gcalConnected ? "rgba(39,174,96,0.25)" : "rgba(255,255,255,0.15)",
+                color: "#fff", fontSize: 12, fontWeight: 600,
+                cursor: "pointer", display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap"
+              }}>
+                {gcalSyncing ? "⏳" : gcalConnected ? "📅 ✓" : "📅 Sync"}
+                {!gcalConnected && " GCal"}
+              </button>
+            )}
+            <button onClick={() => { setShowAddModal(true); setAddType("activity"); }} style={{
+              width: 42, height: 42, borderRadius: 12, border: "none",
+              background: "rgba(255,255,255,0.15)", color: "#fff", fontSize: 26,
+              cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center"
+            }}>+</button>
+          </div>
         </div>
         <div style={{ display: "flex", gap: 6, marginTop: 14, overflowX: "auto", paddingBottom: 4, WebkitOverflowScrolling: "touch" }}>
           <button onClick={() => setFilterPerson("all")} style={{
@@ -479,7 +701,7 @@ function FamilyHub() {
             ) : (
               <div>
                 {weekDates.map(wd => {
-                  const dayActs = filteredActivities.filter(a => a.date === wd).sort((a, b) => (a.time || "").localeCompare(b.time || ""));
+                  const dayActs = filteredCalendarItems.filter(a => a.date === wd).sort((a, b) => (a.time || "").localeCompare(b.time || ""));
                   const isToday = wd === todayKey();
                   return (
                     <div key={wd} style={{ marginBottom: 10 }}>
@@ -507,10 +729,12 @@ function FamilyHub() {
                             <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                               {dayActs.map(a => {
                                 const person = FAMILY.find(f => f.id === a.person);
+                                const isChoreItem = a._source === "chore";
                                 return (
-                                  <div key={a.id || a._fbKey} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12 }}>
+                                  <div key={a.id || a._fbKey} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, opacity: isChoreItem && a.done ? 0.5 : 1 }}>
                                     <div style={{ width: 7, height: 7, borderRadius: 4, background: person?.color || "#ccc", flexShrink: 0 }} />
-                                    <span style={{ fontWeight: 500, color: "#2D3436", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.title}</span>
+                                    {isChoreItem && a.done && <span style={{ fontSize: 10, flexShrink: 0 }}>✓</span>}
+                                    <span style={{ fontWeight: 500, color: "#2D3436", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textDecoration: isChoreItem && a.done ? "line-through" : "none" }}>{a.title}</span>
                                     <span style={{ color: "#999", marginLeft: "auto", fontSize: 11, flexShrink: 0 }}>{a.time}</span>
                                     {a.needs && <span style={{ fontSize: 10, flexShrink: 0 }}>⚠️</span>}
                                   </div>
@@ -614,6 +838,9 @@ function FamilyHub() {
       {/* ── Expanded Activity Modal ── */}
       <Modal open={!!expandedActivity} onClose={() => setExpandedActivity(null)} title={expandedActivity?.title || ""}>
         {expandedActivity && (() => {
+          const isChore = expandedActivity._source === "chore";
+          const person = FAMILY.find(f => f.id === expandedActivity.person);
+          const isKid = person?.role === "kid";
           return (
             <div>
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 14 }}>
@@ -621,16 +848,38 @@ function FamilyHub() {
                 <TypeBadge type={expandedActivity.type} />
               </div>
               <div style={{ fontSize: 14, color: "#555", marginBottom: 8 }}><strong>Date:</strong> {formatDate(expandedActivity.date)}</div>
-              <div style={{ fontSize: 14, color: "#555", marginBottom: 8 }}><strong>Time:</strong> {expandedActivity.time}</div>
+              {expandedActivity.time && (
+                <div style={{ fontSize: 14, color: "#555", marginBottom: 8 }}><strong>Time:</strong> {expandedActivity.time}</div>
+              )}
+              {isChore && isKid && expandedActivity.value > 0 && (
+                <div style={{ fontSize: 14, color: "#555", marginBottom: 8 }}><strong>Value:</strong> ${Number(expandedActivity.value).toFixed(2)}</div>
+              )}
+              {isChore && (
+                <div style={{ fontSize: 14, color: "#555", marginBottom: 8 }}><strong>Status:</strong> {expandedActivity.done ? "✅ Complete" : "⬜ Not done"}</div>
+              )}
               {expandedActivity.needs && (
                 <div style={{ padding: "10px 14px", background: "#FFF9E6", borderRadius: 10, fontSize: 13, color: "#8B6914", marginTop: 8 }}>
                   <strong>⚠️ What to bring / wear:</strong><br />{expandedActivity.needs}
                 </div>
               )}
-              <button onClick={() => { setConfirmDelete({ type: "activity", item: expandedActivity }); setExpandedActivity(null); }} style={{
-                marginTop: 16, width: "100%", padding: 12, borderRadius: 10, border: "1px solid #E74C3C",
+              {isChore && (
+                <button onClick={() => {
+                  toggleChore(expandedActivity);
+                  setExpandedActivity({ ...expandedActivity, done: !expandedActivity.done });
+                }} style={{
+                  marginTop: 16, width: "100%", padding: 12, borderRadius: 10, border: "none",
+                  background: expandedActivity.done ? "#F0F0F0" : "#27AE60",
+                  color: expandedActivity.done ? "#666" : "#fff", fontSize: 14, fontWeight: 600, cursor: "pointer"
+                }}>{expandedActivity.done ? "Mark Not Done" : "✓ Mark Done"}</button>
+              )}
+              <button onClick={() => {
+                const deleteType = isChore ? "chore" : "activity";
+                setConfirmDelete({ type: deleteType, item: expandedActivity });
+                setExpandedActivity(null);
+              }} style={{
+                marginTop: 8, width: "100%", padding: 12, borderRadius: 10, border: "1px solid #E74C3C",
                 background: "#fff", color: "#E74C3C", fontSize: 14, fontWeight: 600, cursor: "pointer"
-              }}>Delete Activity</button>
+              }}>Delete {isChore ? "Chore" : "Activity"}</button>
             </div>
           );
         })()}
