@@ -205,17 +205,17 @@ const DEMO_ACTIVITIES = [
 ];
 
 const DEMO_CHORES = [
-  { id: "c1", title: "Make Bed", person: "sydney", value: 0.50, frequency: "daily", done: false, date: "2026-06-14" },
-  { id: "c2", title: "Make Bed", person: "oliver", value: 0.50, frequency: "daily", done: true, date: "2026-06-14" },
-  { id: "c3", title: "Feed the Dog", person: "oliver", value: 1.00, frequency: "daily", done: false, date: "2026-06-14" },
-  { id: "c4", title: "Set the Table", person: "sydney", value: 0.75, frequency: "daily", done: false, date: "2026-06-14" },
-  { id: "c5", title: "Clear Dishes", person: "oliver", value: 0.75, frequency: "daily", done: true, date: "2026-06-14" },
-  { id: "c6", title: "Pick Up Toys", person: "sydney", value: 1.00, frequency: "daily", done: true, date: "2026-06-14" },
-  { id: "c7", title: "Take Out Trash", person: "oliver", value: 1.50, frequency: "weekly", done: false, date: "2026-06-14" },
-  { id: "c8", title: "Vacuum Living Room", person: "oliver", value: 2.00, frequency: "weekly", done: false, date: "2026-06-14" },
-  { id: "c9", title: "Water Plants", person: "sydney", value: 1.00, frequency: "weekly", done: false, date: "2026-06-14" },
-  { id: "c10", title: "Wipe Counters", person: "alex", value: 0, frequency: "daily", done: false, date: "2026-06-14" },
-  { id: "c11", title: "Load Dishwasher", person: "jess", value: 0, frequency: "daily", done: true, date: "2026-06-14" },
+  { id: "c1", title: "Make Bed", person: "sydney", value: 0.50, frequency: "daily", startDate: "2026-06-01" },
+  { id: "c2", title: "Make Bed", person: "oliver", value: 0.50, frequency: "daily", startDate: "2026-06-01" },
+  { id: "c3", title: "Feed the Dog", person: "oliver", value: 1.00, frequency: "daily", startDate: "2026-06-01" },
+  { id: "c4", title: "Set the Table", person: "sydney", value: 0.75, frequency: "daily", startDate: "2026-06-01" },
+  { id: "c5", title: "Clear Dishes", person: "oliver", value: 0.75, frequency: "daily", startDate: "2026-06-01" },
+  { id: "c6", title: "Pick Up Toys", person: "sydney", value: 1.00, frequency: "daily", startDate: "2026-06-01" },
+  { id: "c7", title: "Take Out Trash", person: "oliver", value: 1.50, frequency: "weekly", startDate: "2026-06-14", dayOfWeek: 0 },
+  { id: "c8", title: "Vacuum Living Room", person: "oliver", value: 2.00, frequency: "weekly", startDate: "2026-06-14", dayOfWeek: 0 },
+  { id: "c9", title: "Water Plants", person: "sydney", value: 1.00, frequency: "weekly", startDate: "2026-06-14", dayOfWeek: 0 },
+  { id: "c10", title: "Wipe Counters", person: "alex", value: 0, frequency: "daily", startDate: "2026-06-01" },
+  { id: "c11", title: "Load Dishwasher", person: "jess", value: 0, frequency: "daily", startDate: "2026-06-01" },
 ];
 
 const DEMO_REWARDS = [
@@ -450,8 +450,88 @@ function FamilyHub() {
   const activitiesColl = useFirebaseCollection("activities", DEMO_ACTIVITIES);
   const choresColl = useFirebaseCollection("chores", DEMO_CHORES);
   const rewardsColl = useFirebaseCollection("rewards", DEMO_REWARDS);
+  const completionsColl = useFirebaseCollection("completions", []);
 
-  // ── Google Calendar connect ──
+  // ── Recurring Chore Logic ──
+  function choreAppliesToDate(chore, dateStr) {
+    const start = chore.startDate || chore.date || "2000-01-01";
+    if (dateStr < start) return false;
+    if (chore.frequency === "daily") return true;
+    if (chore.frequency === "weekly") {
+      const targetDay = new Date(dateStr + "T00:00:00").getDay();
+      const choreDay = chore.dayOfWeek != null ? chore.dayOfWeek : new Date(start + "T00:00:00").getDay();
+      return targetDay === choreDay;
+    }
+    if (chore.frequency === "one-time") return dateStr === start;
+    return dateStr === start; // fallback for legacy data with no frequency
+  }
+
+  function getChoresForDate(dateStr, personFilter) {
+    return choresColl.data
+      .filter(c => choreAppliesToDate(c, dateStr))
+      .filter(c => personFilter === "all" || c.person === personFilter)
+      .map(c => {
+        const choreKey = (c.id || c._fbKey) + "_" + dateStr;
+        const completion = completionsColl.data.find(comp => comp.choreKey === choreKey);
+        return {
+          ...c,
+          date: dateStr,
+          done: !!completion?.done,
+          _choreKey: choreKey,
+          _source: "chore",
+          type: "chore",
+          time: c.time || "",
+          needs: ""
+        };
+      });
+  }
+
+  // Merge activities + recurring chores into one calendar feed for a given date
+  function getCalendarItemsForDate(dateStr) {
+    const acts = activitiesColl.data
+      .filter(a => a.date === dateStr)
+      .map(a => ({ ...a, _source: "activity" }));
+    const chores = getChoresForDate(dateStr, "all");
+    return [...acts, ...chores].sort((a, b) => (a.time || "").localeCompare(b.time || ""));
+  }
+
+  const filteredCalendarItems = getCalendarItemsForDate(selectedDate)
+    .filter(a => filterPerson === "all" || a.person === filterPerson);
+
+  const todayActivities = filteredCalendarItems;
+
+  const todayChores = getChoresForDate(selectedDate, filterPerson)
+    .sort((a, b) => (a.done ? 1 : 0) - (b.done ? 1 : 0));
+
+  const toggleChore = (chore) => {
+    const choreKey = chore._choreKey || (chore.id || chore._fbKey) + "_" + selectedDate;
+    const existing = completionsColl.data.find(c => c.choreKey === choreKey);
+    if (existing) {
+      completionsColl.update(existing.id || existing._fbKey, { done: !existing.done });
+    } else {
+      completionsColl.add({ choreKey, choreId: chore.id || chore._fbKey, date: chore.date || selectedDate, done: true });
+    }
+  };
+
+  const deleteItem = async () => {
+    if (!confirmDelete) return;
+    const { type, item } = confirmDelete;
+    if (item.gcalEventId && GCal.accessToken && GCal.calendarId) {
+      await GCal.deleteEvent(item.gcalEventId);
+    }
+    if (type === "activity") activitiesColl.remove(item.id || item._fbKey);
+    else if (type === "chore") choresColl.remove(item.id || item._fbKey);
+    else if (type === "reward") rewardsColl.remove(item.id || item._fbKey);
+    setConfirmDelete(null);
+  };
+
+  const kidRewardTotals = FAMILY.filter(f => f.role === "kid").map(kid => {
+    const entries = rewardsColl.data.filter(r => r.person === kid.id);
+    const total = entries.reduce((sum, r) => sum + Number(r.amount), 0);
+    const todayDoneChores = getChoresForDate(selectedDate, kid.id).filter(c => c.done);
+    const todayEarned = todayDoneChores.reduce((sum, c) => sum + Number(c.value || 0), 0);
+    return { ...kid, entries, total, todayEarned };
+  });
   const connectGCal = async () => {
     try {
       await GCal.getToken();
@@ -506,65 +586,17 @@ function FamilyHub() {
 
   const weekDates = useMemo(() => getWeekDates(new Date(selectedDate + "T00:00:00")), [selectedDate]);
 
-  // Merge activities + chores into one calendar feed
-  const allCalendarItems = useMemo(() => {
-    const acts = activitiesColl.data.map(a => ({ ...a, _source: "activity" }));
-    const choresAsEvents = choresColl.data.map(c => ({
-      ...c,
-      title: c.title + (c.person ? "" : ""),
-      type: "chore",
-      time: c.time || "",
-      needs: "",
-      _source: "chore"
-    }));
-    return [...acts, ...choresAsEvents];
-  }, [activitiesColl.data, choresColl.data]);
-
-  const filteredCalendarItems = allCalendarItems.filter(a =>
-    filterPerson === "all" || a.person === filterPerson
-  );
-
-  const todayActivities = filteredCalendarItems
-    .filter(a => a.date === selectedDate)
-    .sort((a, b) => (a.time || "").localeCompare(b.time || ""));
-
-  const todayChores = choresColl.data
-    .filter(c => c.date === selectedDate && (filterPerson === "all" || c.person === filterPerson))
-    .sort((a, b) => (a.done ? 1 : 0) - (b.done ? 1 : 0));
-
-  const toggleChore = (chore) => {
-    choresColl.update(chore.id || chore._fbKey, { done: !chore.done });
-  };
-
-  const deleteItem = async () => {
-    if (!confirmDelete) return;
-    const { type, item } = confirmDelete;
-    // Delete from Google Calendar if synced
-    if (item.gcalEventId && GCal.accessToken && GCal.calendarId) {
-      await GCal.deleteEvent(item.gcalEventId);
-    }
-    if (type === "activity") activitiesColl.remove(item.id || item._fbKey);
-    else if (type === "chore") choresColl.remove(item.id || item._fbKey);
-    else if (type === "reward") rewardsColl.remove(item.id || item._fbKey);
-    setConfirmDelete(null);
-  };
-
-  const kidRewardTotals = FAMILY.filter(f => f.role === "kid").map(kid => {
-    const entries = rewardsColl.data.filter(r => r.person === kid.id);
-    const total = entries.reduce((sum, r) => sum + Number(r.amount), 0);
-    const todayEarned = choresColl.data
-      .filter(c => c.person === kid.id && c.done && c.date === selectedDate)
-      .reduce((sum, c) => sum + Number(c.value || 0), 0);
-    return { ...kid, entries, total, todayEarned };
-  });
-
   const handleAdd = async () => {
     if (!formTitle.trim()) return;
-    const item = addType === "activity"
-      ? { title: formTitle, type: formType, person: formPerson, date: formDate, time: formTime, needs: formNeeds }
-      : addType === "chore"
-      ? { title: formTitle, person: formPerson, value: parseFloat(formValue) || 0, frequency: formFreq, done: false, date: formDate }
-      : null;
+    let item;
+    if (addType === "activity") {
+      item = { title: formTitle, type: formType, person: formPerson, date: formDate, time: formTime, needs: formNeeds };
+    } else if (addType === "chore") {
+      const dayOfWeek = new Date(formDate + "T00:00:00").getDay();
+      item = { title: formTitle, person: formPerson, value: parseFloat(formValue) || 0, frequency: formFreq, startDate: formDate, dayOfWeek };
+    } else {
+      item = null;
+    }
 
     if (addType === "reward") {
       const amt = parseFloat(formValue) || 0;
@@ -695,13 +727,13 @@ function FamilyHub() {
                 {todayActivities.length === 0 ? (
                   <div style={{ textAlign: "center", padding: 48, color: "#999", fontSize: 14 }}>Nothing scheduled for this day.</div>
                 ) : todayActivities.map(a => (
-                  <ActivityCard key={a.id || a._fbKey} activity={a} onExpand={setExpandedActivity} />
+                  <ActivityCard key={a._choreKey || a.id || a._fbKey} activity={a} onExpand={setExpandedActivity} />
                 ))}
               </div>
             ) : (
               <div>
                 {weekDates.map(wd => {
-                  const dayActs = filteredCalendarItems.filter(a => a.date === wd).sort((a, b) => (a.time || "").localeCompare(b.time || ""));
+                  const dayActs = getCalendarItemsForDate(wd).filter(a => filterPerson === "all" || a.person === filterPerson);
                   const isToday = wd === todayKey();
                   return (
                     <div key={wd} style={{ marginBottom: 10 }}>
@@ -731,7 +763,7 @@ function FamilyHub() {
                                 const person = FAMILY.find(f => f.id === a.person);
                                 const isChoreItem = a._source === "chore";
                                 return (
-                                  <div key={a.id || a._fbKey} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, opacity: isChoreItem && a.done ? 0.5 : 1 }}>
+                                  <div key={a._choreKey || a.id || a._fbKey} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, opacity: isChoreItem && a.done ? 0.5 : 1 }}>
                                     <div style={{ width: 7, height: 7, borderRadius: 4, background: person?.color || "#ccc", flexShrink: 0 }} />
                                     {isChoreItem && a.done && <span style={{ fontSize: 10, flexShrink: 0 }}>✓</span>}
                                     <span style={{ fontWeight: 500, color: "#2D3436", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textDecoration: isChoreItem && a.done ? "line-through" : "none" }}>{a.title}</span>
@@ -774,7 +806,7 @@ function FamilyHub() {
             {todayChores.length === 0 ? (
               <div style={{ textAlign: "center", padding: 48, color: "#999", fontSize: 14 }}>No chores for this day.</div>
             ) : todayChores.map(c => (
-              <ChoreRow key={c.id || c._fbKey} chore={c} onToggle={toggleChore} onDelete={(item) => setConfirmDelete({ type: "chore", item })} />
+              <ChoreRow key={c._choreKey || c.id || c._fbKey} chore={c} onToggle={toggleChore} onDelete={(item) => setConfirmDelete({ type: "chore", item })} />
             ))}
           </div>
         )}
