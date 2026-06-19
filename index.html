@@ -526,10 +526,27 @@ function FamilyHub() {
   };
 
   const kidRewardTotals = FAMILY.filter(f => f.role === "kid").map(kid => {
+    // Manual bonuses and penalties
     const entries = rewardsColl.data.filter(r => r.person === kid.id);
-    const total = entries.reduce((sum, r) => sum + Number(r.amount), 0);
+    const manualTotal = entries.reduce((sum, r) => sum + Number(r.amount), 0);
+
+    // Accumulated chore earnings from ALL completed days
+    const kidChores = choresColl.data.filter(c => c.person === kid.id);
+    const allTimeChoreEarnings = completionsColl.data
+      .filter(comp => comp.done)
+      .reduce((sum, comp) => {
+        const choreId = comp.choreId;
+        const chore = kidChores.find(c => (c.id || c._fbKey) === choreId);
+        if (chore) return sum + Number(chore.value || 0);
+        return sum;
+      }, 0);
+
+    const total = manualTotal + allTimeChoreEarnings;
+
+    // Today's earnings (for the "today" indicator)
     const todayDoneChores = getChoresForDate(selectedDate, kid.id).filter(c => c.done);
     const todayEarned = todayDoneChores.reduce((sum, c) => sum + Number(c.value || 0), 0);
+
     return { ...kid, entries, total, todayEarned };
   });
   const connectGCal = async () => {
@@ -717,7 +734,7 @@ function FamilyHub() {
               </div>
               <div style={{ display: "flex", gap: 6 }}>
                 <button onClick={() => calView === "day" ? navigateDay(-1) : navigateWeek(-1)} style={{ width: 34, height: 34, borderRadius: 8, border: "1px solid #ddd", background: "#fff", cursor: "pointer", fontSize: 16 }}>←</button>
-                <button onClick={() => setSelectedDate(todayKey())} style={{ padding: "0 12px", height: 34, borderRadius: 8, border: "1px solid #ddd", background: "#fff", cursor: "pointer", fontSize: 12, fontWeight: 600, color: "#666" }}>Today</button>
+                <button onClick={() => setSelectedDate(todayKey())} style={{ padding: "0 12px", height: 34, borderRadius: 8, border: "1px solid #ddd", background: "#fff", cursor: "pointer", fontSize: 12, fontWeight: 600, color: "#666" }}>{new Date(selectedDate + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" })}</button>
                 <button onClick={() => calView === "day" ? navigateDay(1) : navigateWeek(1)} style={{ width: 34, height: 34, borderRadius: 8, border: "1px solid #ddd", background: "#fff", cursor: "pointer", fontSize: 16 }}>→</button>
               </div>
             </div>
